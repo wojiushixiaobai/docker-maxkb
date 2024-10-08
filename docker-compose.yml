@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-postgres
-    image: wojiushixiaobai/postgres:17-pgvector
+    image: ghcr.io/wojiushixiaobai/postgres:17-pgvector
     restart: always
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -25,7 +25,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: wojiushixiaobai/maxkb:latest
+    image: ghcr.io/wojiushixiaobai/maxkb:${VERSION:-latest}
     restart: always
     environment:
       TZ: ${TZ:-Asia/Shanghai}
