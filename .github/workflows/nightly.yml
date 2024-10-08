@@ -1,0 +1,186 @@
+on:
+  schedule:
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+
+name: Auto Update for nightly
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check version
+        id: get_version
+        run: |
+          version=$(curl -s https://api.github.com/repos/1Panel-dev/MaxKB/releases | jq -r '.[0].tag_name')
+          echo "version=${version}" >> $GITHUB_ENV
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          echo "Current version: ${version}"
+
+      - name: Check update
+        run: |
+          wget -O init.sql.new https://github.com/1Panel-dev/MaxKB/raw/refs/heads/main/installer/init.sql || exit 1
+          if ! diff init.sql init.sql.new; then
+            rm -f init.sql
+            mv init.sql.new init.sql
+            git config --global user.name ${{ github.actor }}
+            git config --global user.email ${{ github.actor }}@users.noreply.github.com
+            git add .
+            git commit -m "Update init.sql for $(date +%Y-%m-%d)"
+            git push origin HEAD
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Check Release
+        run: |
+          version=${{ needs.check.outputs.version }}
+          if [ -z "$version" ]; then
+            echo "No new release found"
+            exit 1
+          fi
+          echo "version=${version}" >> $GITHUB_ENV
+          if ! gh release view ${version} -R ${{ github.repository }} > /dev/null 2>&1; then
+            echo "build=1" >> $GITHUB_ENV
+            echo "Build for version ${version}"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout code
+        if: env.build == '1'
+        uses: actions/checkout@v4
+
+      - name: Cache Docker layers
+        if: env.build == '1'
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/.buildx-cache
+            ~/.npm
+            ~/.cache
+          key: maxkb-buildx-${{ github.sha }}
+          restore-keys: |
+            maxkb-buildx-
+
+      - uses: actions/checkout@v4
+        if: env.build == '1'
+        with:
+          repository: 1Panel-dev/MaxKB
+          ref: ${{ env.version }}
+          path: app
+
+      - uses: actions/setup-node@v4
+        if: env.build == '1'
+        with:
+          node-version: 18
+
+      - uses: actions/setup-python@v5
+        if: env.build == '1'
+        with:
+          python-version: 3.11
+
+      - name: Build ui
+        if: env.build == '1'
+        run: |
+          cd app/ui
+          npm install
+          npm run build
+          rm -rf node_modules
+
+      - name: Build model
+        if: env.build == '1'
+        run: |
+          cp app/installer/install_model.py ./
+          pip install pycrawlers
+          pip install transformers
+          python install_model.py
+
+      - name: Prepare files
+        if: env.build == '1'
+        run: |
+          rm -rf app/.git
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        if: env.build == '1'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push maxkb
+        if: env.build == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          provenance: false
+          file: Dockerfile.cicd
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DOCKER_IMAGE_TAG=${{ env.version }}
+            BUILD_AT=$(TZ=Asia/Shanghai date +'%Y-%m-%dT%H:%M')
+            GITHUB_COMMIT=${GITHUB_SHA::8}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/maxkb:latest
+            ghcr.io/${{ github.repository_owner }}/maxkb:${{ env.version }}
+          outputs: type=image,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Build and push postgres
+        if: env.build == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          provenance: false
+          file: Dockerfile.postgres
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/postgres:lastest
+            ghcr.io/${{ github.repository_owner }}/postgres:17-pgvector
+          outputs: type=image,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Move cache
+        if: env.build == '1'
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Create Release
+        if: env.build == '1'
+        run: |
+          git config --global user.name ${{ github.actor }}
+          git config --global user.email ${{ github.actor }}@users.noreply.github.com
+          git tag -a ${{ env.version }} -m "Release ${{ env.version }}"
+          git push origin ${{ env.version }} || true
+          gh release create ${{ env.version }} -t ${{ env.version }} -n "Release ${{ env.version }}" || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
