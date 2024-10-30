@@ -55,6 +55,8 @@ RUN --mount=type=cache,target=/root/.cache \
     fi \
     && poetry install
 
+COPY . /opt/maxkb/app
+
 RUN set -ex \
     && mkdir -p /opt/maxkb/model /opt/maxkb/conf \
     && rm -rf /opt/maxkb/app/ui
@@ -82,11 +84,6 @@ ARG DOCKER_IMAGE_TAG=dev \
 
 ENV MAXKB_VERSION="${DOCKER_IMAGE_TAG} (build at ${BUILD_AT}, commit: ${GITHUB_COMMIT})" \
     MAXKB_CONFIG_TYPE=ENV \
-    MAXKB_DB_NAME=maxkb \
-    MAXKB_DB_HOST=127.0.0.1 \
-    MAXKB_DB_PORT=5432  \
-    MAXKB_DB_USER=root \
-    MAXKB_DB_PASSWORD=Password123@postgres \
     MAXKB_EMBEDDING_MODEL_NAME=/opt/maxkb/model/embedding/shibing624_text2vec-base-chinese \
     MAXKB_EMBEDDING_MODEL_PATH=/opt/maxkb/model/embedding \
     MAXKB_SANDBOX=true \
