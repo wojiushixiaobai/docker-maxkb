@@ -120,6 +120,7 @@ jobs:
         if: env.build == '1'
         run: |
           rm -rf app/.git
+          sed -i "s/readme = .*/package-mode = false/g" app/pyproject.toml
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
